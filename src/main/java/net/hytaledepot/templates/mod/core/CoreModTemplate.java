@@ -3,38 +3,34 @@ package net.hytaledepot.templates.mod.core;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class CoreModTemplate {
   private final Map<String, AtomicLong> actionCounters = new ConcurrentHashMap<>();
   private final Map<String, String> lastActionBySender = new ConcurrentHashMap<>();
   private final AtomicBoolean demoFlagEnabled = new AtomicBoolean(false);
   private final AtomicLong errorCount = new AtomicLong();
-  private final Map<String, String> domainState = new ConcurrentHashMap<>();
-  private final Map<String, AtomicLong> numericState = new ConcurrentHashMap<>();
-
+  private final Map<String, String> moduleHealth = new ConcurrentHashMap<>();
   private volatile Path dataDirectory;
 
   public void onInitialize(Path dataDirectory) {
     this.dataDirectory = dataDirectory;
-    actionCounters.clear();
-    lastActionBySender.clear();
-    domainState.clear();
-    numericState.clear();
+    moduleHealth.clear();
+    moduleHealth.put("commands", "healthy");
+    moduleHealth.put("heartbeat", "healthy");
+    moduleHealth.put("storage", "healthy");
+    moduleHealth.put("integrations", "healthy");
   }
 
   public void onShutdown() {
-    actionCounters.clear();
-    lastActionBySender.clear();
-    domainState.clear();
-    numericState.clear();
+    moduleHealth.clear();
   }
 
   public void onHeartbeat(long tick) {
     actionCounters.computeIfAbsent("heartbeat", key -> new AtomicLong()).incrementAndGet();
-    if (tick % 90 == 0) {
-      actionCounters.computeIfAbsent("milestone", key -> new AtomicLong()).incrementAndGet();
+    if (tick % 120 == 0) {
+      moduleHealth.putIfAbsent("heartbeat", "healthy");
     }
   }
 
@@ -64,24 +60,13 @@ public final class CoreModTemplate {
 
   public String diagnostics(String sender, long heartbeatTicks) {
     String directory = dataDirectory == null ? "unset" : dataDirectory.toString();
-    return "sender="
-        + sender
-        + ", heartbeatTicks="
-        + heartbeatTicks
-        + ", demoFlag="
-        + demoFlagEnabled.get()
-        + ", ops="
-        + operationCount()
-        + ", lastAction="
-        + lastActionBySender.getOrDefault(sender, "none")
-        + ", errors="
-        + errorCount.get()
-        + ", domainEntries="
-        + domainState.size()
-        + ", numericEntries="
-        + numericState.size()
-        + ", dataDirectory="
-        + directory;
+    return "sender=" + sender
+        + ", heartbeatTicks=" + heartbeatTicks
+        + ", demoFlag=" + demoFlagEnabled.get()
+        + ", ops=" + operationCount()
+        + ", lastAction=" + lastActionBySender.getOrDefault(sender, "none")
+        + ", errors=" + errorCount.get()
+        + ", modules=" + moduleHealth.size() + ", healthy=" + moduleHealth.values().stream().filter("healthy"::equals).count() + ", degraded=" + (moduleHealth.size() - moduleHealth.values().stream().filter("healthy"::equals).count()) + ", dataDirectory=" + directory;
   }
 
   public long operationCount() {
@@ -98,32 +83,23 @@ public final class CoreModTemplate {
 
   private String handleDomainAction(String sender, String action, long heartbeatTicks) {
     if ("sample".equals(action) || "module-scan".equals(action)) {
-      domainState.put("module:economy", "healthy");
-      domainState.put("module:chat", "healthy");
-      domainState.put("module:matchmaking", "healthy");
-      return "modules healthy=3";
+      long healthy = moduleHealth.values().stream().filter("healthy"::equals).count();
+      return "module scan complete, healthy=" + healthy + "/" + moduleHealth.size();
     }
     if ("mark-unhealthy".equals(action)) {
-      domainState.put("module:chat", "degraded");
-      return "module:chat=degraded";
+      moduleHealth.put("integrations", "degraded");
+      return "integrations marked degraded";
     }
     if ("mark-healthy".equals(action)) {
-      domainState.put("module:chat", "healthy");
-      return "module:chat=healthy";
+      moduleHealth.replaceAll((key, value) -> "healthy");
+      return "all modules marked healthy";
     }
     return null;
   }
 
-  private long incrementNumber(String key, long delta) {
-    return numericState.computeIfAbsent(key, item -> new AtomicLong()).addAndGet(delta);
-  }
-
-  private long number(String key) {
-    return numericState.computeIfAbsent(key, item -> new AtomicLong()).get();
-  }
-
-  private void setNumber(String key, long value) {
-    numericState.computeIfAbsent(key, item -> new AtomicLong()).set(value);
+  private static String normalizeAction(String action) {
+    String normalized = String.valueOf(action == null ? "" : action).trim().toLowerCase();
+    return normalized.isEmpty() ? "sample" : normalized;
   }
 
   private static boolean toggleFlag(AtomicBoolean flag) {
@@ -134,10 +110,5 @@ public final class CoreModTemplate {
         return next;
       }
     }
-  }
-
-  private static String normalizeAction(String action) {
-    String normalized = String.valueOf(action == null ? "" : action).trim().toLowerCase();
-    return normalized.isEmpty() ? "sample" : normalized;
   }
 }
